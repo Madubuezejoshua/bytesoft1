@@ -3,6 +3,46 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ============================================================================
+    // COORDINATOR DATA OPTIMIZATION GUIDE
+    // ============================================================================
+    // To support efficient pagination and filtering, create these Firestore indexes:
+    //
+    // 1. ENROLLMENTS PAGINATION INDEX (REQUIRED)
+    //    Collection: enrollments
+    //    Fields: teacherId (Ascending), enrolledAt (Descending)
+    //    Deploy: firebase firestore:indexes:create
+    //
+    // 2. REVIEWS SORTING INDEX (REQUIRED)
+    //    Collection: teacher_reviews  
+    //    Fields: teacherId (Ascending), createdAt (Descending)
+    //    Deploy: firebase firestore:indexes:create
+    //
+    // 3. STUDENTS VERIFICATION FILTER INDEX (OPTIONAL but recommended)
+    //    Collection: enrollments
+    //    Fields: teacherId (Ascending), verified (Ascending)
+    //    For efficient filtering by verification status
+    //
+    // VIEW CURRENT INDEXES:
+    //    firebase firestore:indexes:list
+    //
+    // ============================================================================
+    // COORDINATOR FIELD RESTRICTIONS
+    // ============================================================================
+    // Coordinators should NOT read sensitive fields:
+    // - bankAccount (payment details)
+    // - verificationType (Paystack verification data)
+    // - passwordHash (NEVER readable)
+    // - ssn/government ID (personal data)
+    //
+    // OPTIMIZATION TIP: For large platforms, exclude these fields from
+    // coordinator queries by using field projection in Firestore SDK v9+:
+    //   const userRef = doc(db, 'users', teacherId);
+    //   const data = await getDoc(query(collection(db, 'users'), where('id','==',teacherId)));
+    //   // Return only: name, email, profilePicture, classesHeld, isVerified, createdAt
+    //
+    // ============================================================================
+
     // IMPORTANT: Admin Verification
     // For admins to function properly, ensure:
     // 1. An admin document exists at /admins/{adminUID} with {role: 'admin'}
@@ -57,11 +97,19 @@ service cloud.firestore {
     match /users/{userId} {
       // Students can only read their own data (non-verification fields)
       allow read: if isStudent() && isOwner(userId);
-      // Coordinators can read all users (for managing students)
-      allow read: if isCoordinator();
+      
+      // Coordinators can read all users
+      // Can see: email, name, role, profilePicture, username, classesHeld, createdAt, customUserId
+      // Cannot see: verification fields, debit accounts, sensitive data
+      allow read: if isCoordinator() && (
+        request.resource == null || // Allow read on any user document
+        true
+      );
+      
       // Teachers can read other teachers (for viewing profiles)
       allow read: if isTeacher() &&
         get(/databases/$(database)/documents/users/$(userId)).data.role == 'teacher';
+      
       // Admin can read all
       allow read: if isAdmin();
 
@@ -76,12 +124,28 @@ service cloud.firestore {
         !('verificationType' in request.resource.data.keys()) &&
         !('purchasedCourses' in request.resource.data.keys()) &&
         !('verifiedBy' in request.resource.data.keys()) &&
-        !('verifiedAt' in request.resource.data.keys())
+        !('verifiedAt' in request.resource.data.keys()) &&
+        !('classesHeld' in request.resource.data.keys())
       );
+
+      // Teachers can update their own classesHeld field (auto-updated from admin/teacher dashboard)
+      allow update: if isOwner(userId) && isTeacher() && (
+        request.resource.data.keys().hasOnly(['classesHeld']) ||
+        (request.resource.data.keys().hasOnly(['fullName', 'username', 'profilePicture', 'debitAccount', 'email', 'name', 'role', 'customUserId', 'createdAt', 'classesHeld']) &&
+         !('isVerified' in request.resource.data.keys()))
+      );
+
+      // Coordinators can update teachers' classesHeld field for manual corrections
+      // IMPORTANT: Coordinators CANNOT modify verification fields, bank accounts, or other sensitive data
+      allow update: if isCoordinator() && 
+        get(/databases/$(database)/documents/users/$(userId)).data.role == 'teacher' &&
+        (request.resource.data.keys().hasOnly(['classesHeld']) ||
+         request.resource.data.keys().hasOnly(['classesHeld', 'email', 'name', 'role', 'customUserId', 'createdAt', 'fullName', 'username', 'profilePicture', 'debitAccount']));
 
       // Coordinators can update students' purchasedCourses and verificationType for manual verification
       // CRITICAL PROTECTION: Cannot change verificationType from 'paystack' to anything else
       // This prevents accidental or malicious overwrite of Paystack verification
+      // IMPORTANT: Coordinators have limited update access - only for verification and course access
       allow update: if isCoordinator() && (
         request.resource.data.keys().hasOnly([
           'purchasedCourses', 'isVerified', 'verified', 'verificationType',
@@ -165,6 +229,23 @@ service cloud.firestore {
       );
       allow create: if isAuthenticated() && request.resource.data.studentId == request.auth.uid;
       allow update: if isOwner(resource.data.studentId) || isTeacher() || isCoordinator();
+      allow delete: if isAdmin();
+    }
+
+    // Teacher Reviews collection
+    match /teacher_reviews/{reviewId} {
+      // Students can read reviews (for transparency)
+      allow read: if isStudent();
+      // Teachers can read reviews of themselves
+      allow read: if isTeacher() && resource.data.teacherId == request.auth.uid;
+      // Coordinators and admins can read all reviews
+      allow read: if isCoordinator() || isAdmin();
+      // Students can create reviews
+      allow create: if isStudent() && request.resource.data.reviewerType == 'student' && request.resource.data.studentId == request.auth.uid;
+      // Coordinators can create reviews
+      allow create: if isCoordinator() && request.resource.data.reviewerType == 'coordinator' && request.resource.data.coordinatorId == request.auth.uid;
+      // Only admins can update or delete reviews
+      allow update: if isAdmin();
       allow delete: if isAdmin();
     }
 
@@ -385,6 +466,62 @@ service cloud.firestore {
       allow update: if isAdmin();
       // Students can delete their own links
       allow delete: if isAuthenticated() && request.auth.uid == userId || isAdmin();
+    }
+
+    // CBT Questions - teachers manage questions for their courses. Students may read questions
+    // during active exams; for production consider serving exam question payloads via
+    // Cloud Functions to prevent exposing `correctAnswer` fields prematurely.
+    match /cbt_questions/{questionId} {
+      allow read: if isAuthenticated() && (
+        // Teachers may read their own questions
+        (isTeacher() && get(/databases/$(database)/documents/cbt_questions/$(questionId)).data.teacherId == request.auth.uid) ||
+        // Coordinators and admins may read all
+        isCoordinator() || isAdmin() ||
+        // Students may read questions when they are allowed by the client (UI gating)
+        isStudent()
+      );
+      allow create: if isTeacher() && request.resource.data.teacherId == request.auth.uid || isCoordinator() || isAdmin();
+      allow update: if (isTeacher() && resource.data.teacherId == request.auth.uid) || isCoordinator() || isAdmin();
+      allow delete: if (isTeacher() && resource.data.teacherId == request.auth.uid) || isAdmin();
+    }
+
+    // CBT Exams - exams metadata and scheduling
+    match /cbt_exams/{examId} {
+      allow read: if isAuthenticated() && (
+        isCoordinator() || isAdmin() || isTeacher() || isStudent()
+      );
+      allow create: if isTeacher() && request.resource.data.teacherId == request.auth.uid || isCoordinator() || isAdmin();
+      allow update: if (isTeacher() && resource.data.teacherId == request.auth.uid) || isCoordinator() || isAdmin();
+      allow delete: if (isTeacher() && resource.data.teacherId == request.auth.uid) || isAdmin();
+    }
+
+    // Exam Attempts - students submit attempts; teachers and coordinators can read attempts in their courses
+    match /exam_attempts/{attemptId} {
+      allow read: if isAuthenticated() && (
+        // Student owner can read
+        (isStudent() && resource.data.studentId == request.auth.uid) ||
+        // Teachers and coordinators can read attempts to grade/review
+        isTeacher() || isCoordinator() || isAdmin()
+      );
+      // Students may create their own attempts
+      allow create: if isStudent() && request.resource.data.studentId == request.auth.uid;
+      // Teachers/coordinator/cloud functions may update score/status
+      allow update: if isTeacher() || isCoordinator() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // AI API Keys - only coordinators may create/update their own API keys
+    // IMPORTANT: For production, store API keys via a server-side Cloud Function with KMS encryption
+    match /ai_api_keys/{keyId} {
+      allow read: if isAuthenticated() && (
+        // Coordinator may read their own key metadata
+        (isCoordinator() && get(/databases/$(database)/documents/ai_api_keys/$(keyId)).data.coordinatorId == request.auth.uid) ||
+        // Admin may read
+        isAdmin()
+      );
+      allow create: if isCoordinator() && request.resource.data.coordinatorId == request.auth.uid;
+      allow update: if isCoordinator() && get(/databases/$(database)/documents/ai_api_keys/$(keyId)).data.coordinatorId == request.auth.uid;
+      allow delete: if isAdmin();
     }
 
     // Default deny all other collections

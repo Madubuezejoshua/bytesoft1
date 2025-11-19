@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import CBTManagementTab from '@/components/teacher/CBTManagementTab';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -18,6 +19,7 @@ import { CourseStudentsList } from '@/components/teacher/CourseStudentsList';
 import { ClassCountBadge } from '@/components/teacher/ClassCountBadge';
 import { CourseClassHistory } from '@/components/teacher/CourseClassHistory';
 import { courseService } from '@/lib/courseService';
+import { teacherClassService } from '@/lib/teacherClassService';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { toast } from 'sonner';
 import DashboardHeader from '@/components/dashboard/DashboardHeader';
@@ -97,12 +99,25 @@ const TeacherDashboard = () => {
         where('teacherId', '==', user.id),
         orderBy('startTime', 'desc')
       );
-      const classesUnsubscribe = onSnapshot(classesQuery, (snapshot) => {
+      const classesUnsubscribe = onSnapshot(classesQuery, async (snapshot) => {
         const classesData = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         })) as ScheduledClass[];
         setScheduledClasses(classesData);
+
+        // Auto-sync classesHeld count with completed classes
+        const completedClassesCount = classesData.filter(
+          c => c.status === 'completed'
+        ).length;
+        
+        try {
+          await teacherClassService.syncClassesHeld(user.id, completedClassesCount);
+        } catch (error) {
+          console.error('Error syncing classes held:', error);
+          // Don't show error toast as this is a background sync
+        }
+
         setLoading(false);
       });
 
@@ -204,6 +219,7 @@ const TeacherDashboard = () => {
             <TabsTrigger value="course-students">Course Students</TabsTrigger>
             <TabsTrigger value="browse">Browse Courses</TabsTrigger>
             <TabsTrigger value="requests">My Requests</TabsTrigger>
+            <TabsTrigger value="cbt">CBT Exams</TabsTrigger>
             <TabsTrigger value="classes">Classes</TabsTrigger>
             <TabsTrigger value="links">Share Links</TabsTrigger>
             <TabsTrigger value="meetings">Meetings</TabsTrigger>
@@ -306,6 +322,10 @@ const TeacherDashboard = () => {
                 <MyRequests teacherId={user?.id || ''} />
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="cbt" className="space-y-4">
+            <CBTManagementTab />
           </TabsContent>
 
           <TabsContent value="students" className="space-y-4">

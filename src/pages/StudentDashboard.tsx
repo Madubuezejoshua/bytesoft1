@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import CBTTab from '@/components/student/CBTTab';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -103,7 +104,6 @@ const StudentDashboard = () => {
     setShowTeacherDetails(true);
   };
 
-
   const navigationItems = [
     {
       label: 'Browse Courses',
@@ -112,6 +112,10 @@ const StudentDashboard = () => {
     {
       label: 'My Courses',
       onClick: () => setActiveTab('courses'),
+    },
+    {
+      label: 'CBT Exams',
+      onClick: () => setActiveTab('cbt'),
     },
     {
       label: 'Meetings',
@@ -161,6 +165,7 @@ const StudentDashboard = () => {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList>
             <TabsTrigger value="courses">Your Purchased Courses</TabsTrigger>
+            <TabsTrigger value="cbt">CBT Exams</TabsTrigger>
             <TabsTrigger value="links">Special Links</TabsTrigger>
             <TabsTrigger value="meetings">Meetings</TabsTrigger>
           </TabsList>
@@ -209,6 +214,10 @@ const StudentDashboard = () => {
                 ))}
               </div>
             )}
+          </TabsContent>
+
+          <TabsContent value="cbt">
+            <CBTTab />
           </TabsContent>
 
           <TabsContent value="links">

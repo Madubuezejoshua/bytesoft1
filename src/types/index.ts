@@ -14,6 +14,7 @@ export interface User {
   purchasedCourses?: string[];
   verifiedBy?: string;
   verifiedAt?: string;
+  classesHeld?: number;
 }
 
 export type UserRole = 'student' | 'coordinator' | 'teacher' | 'admin';

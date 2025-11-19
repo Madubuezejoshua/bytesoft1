@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Users, BookOpen, Calendar, AlertCircle, Video, TrendingUp, Link as LinkIcon, CheckCircle } from 'lucide-react';
+import { Users, BookOpen, Calendar, AlertCircle, Video, TrendingUp, Link as LinkIcon, CheckCircle, Star, Eye, Key } from 'lucide-react';
 import { collection, getDocs, query, where, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import CreateCourseDialog from '@/components/courses/CreateCourseDialog';
@@ -17,12 +17,19 @@ import DashboardHeader from '@/components/dashboard/DashboardHeader';
 import StatsCard from '@/components/dashboard/StatsCard';
 import { SpecialLinksOverview } from '@/components/coordinator/SpecialLinksOverview';
 import VerifiedTab from '@/components/coordinator/VerifiedTab';
+import { TeacherReviewsPanel } from '@/components/coordinator/TeacherReviewsPanel';
+import TeacherDetailsDialog from '@/components/coordinator/TeacherDetailsDialog';
+import AIAPIKeyTab from '@/components/coordinator/AIAPIKeyTab';
 
 const CoordinatorDashboard = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [stats, setStats] = useState({ students: 0, courses: 0, enrollments: 0, pendingRequests: 0 });
   const [activeTab, setActiveTab] = useState('requests');
+  const [teachers, setTeachers] = useState<any[]>([]);
+  const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
+  const [selectedTeacherName, setSelectedTeacherName] = useState<string>('');
+  const [teacherDetailsOpen, setTeacherDetailsOpen] = useState(false);
 
   useEffect(() => {
     if (!user || (user.role !== 'coordinator' && user.role !== 'admin')) {
@@ -35,6 +42,12 @@ const CoordinatorDashboard = () => {
   const fetchStats = () => {
     const usersUnsub = onSnapshot(collection(db, 'users'), (snapshot) => {
       setStats((prev) => ({ ...prev, students: snapshot.size }));
+      
+      // Also fetch teachers separately
+      const teachersData = snapshot.docs
+        .filter(doc => doc.data().role === 'teacher')
+        .map(doc => ({ id: doc.id, ...doc.data() }));
+      setTeachers(teachersData);
     });
 
     const coursesUnsub = onSnapshot(collection(db, 'courses'), (snapshot) => {
@@ -166,8 +179,16 @@ const CoordinatorDashboard = () => {
               <CheckCircle className="w-4 h-4 mr-2" />
               Verified
             </TabsTrigger>
+            <TabsTrigger value="reviews">
+              <Star className="w-4 h-4 mr-2" />
+              Teacher Reviews
+            </TabsTrigger>
             <TabsTrigger value="courses">Courses</TabsTrigger>
             <TabsTrigger value="manage">Manage Courses</TabsTrigger>
+            <TabsTrigger value="ai-api">
+              <Key className="w-4 h-4 mr-2" />
+              AI API
+            </TabsTrigger>
             <TabsTrigger value="meetings">Meetings</TabsTrigger>
             <TabsTrigger value="special-links">Special Links</TabsTrigger>
           </TabsList>
@@ -178,6 +199,82 @@ const CoordinatorDashboard = () => {
 
           <TabsContent value="verified">
             <VerifiedTab />
+          </TabsContent>
+
+          <TabsContent value="reviews">
+            <div className="space-y-6">
+              {teachers.length === 0 ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>No Teachers Found</CardTitle>
+                    <CardDescription>There are currently no teachers on the platform.</CardDescription>
+                  </CardHeader>
+                </Card>
+              ) : (
+                <>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Select a Teacher</CardTitle>
+                      <CardDescription>Choose a teacher to view their student reviews</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {teachers.map(teacher => (
+                          <div
+                            key={teacher.id}
+                            className="p-4 rounded-lg border-2 border-border hover:border-primary/50 transition-all"
+                          >
+                            <button
+                              onClick={() => {
+                                setSelectedTeacherId(teacher.id);
+                                setSelectedTeacherName(teacher.name);
+                              }}
+                              className="text-left w-full"
+                            >
+                              <h3 className="font-semibold text-foreground">{teacher.name}</h3>
+                              <p className="text-sm text-muted-foreground">{teacher.email}</p>
+                              {teacher.classesHeld !== undefined && (
+                                <div className="mt-2 flex items-center gap-1 text-sm">
+                                  <span className="text-muted-foreground">Classes:</span>
+                                  <span className="font-semibold">{teacher.classesHeld}</span>
+                                </div>
+                              )}
+                            </button>
+                            <Button
+                              onClick={() => {
+                                setSelectedTeacherId(teacher.id);
+                                setSelectedTeacherName(teacher.name);
+                                setTeacherDetailsOpen(true);
+                              }}
+                              variant="outline"
+                              size="sm"
+                              className="w-full mt-3 gap-2"
+                            >
+                              <Eye className="w-4 h-4" />
+                              View Details
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {selectedTeacherId && (
+                    <>
+                      <TeacherReviewsPanel
+                        teacherId={selectedTeacherId}
+                        teacherName={selectedTeacherName}
+                      />
+                      <TeacherDetailsDialog
+                        teacherId={selectedTeacherId}
+                        isOpen={teacherDetailsOpen}
+                        onClose={() => setTeacherDetailsOpen(false)}
+                      />
+                    </>
+                  )}
+                </>
+              )}
+            </div>
           </TabsContent>
 
           <TabsContent value="courses">
@@ -201,6 +298,10 @@ const CoordinatorDashboard = () => {
 
           <TabsContent value="manage">
             <CourseManagement />
+          </TabsContent>
+
+          <TabsContent value="ai-api">
+            <AIAPIKeyTab />
           </TabsContent>
 
           <TabsContent value="meetings">
